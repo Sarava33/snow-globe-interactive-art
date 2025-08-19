@@ -238,6 +238,7 @@ npm run dev  # Start with auto-restart
 
 ## Acknowledgments
 
+- [circlefour/crowd-ctrl](https://github.com/circlefour/crowd-ctrl) by [circlefour](https://github.com/circlefour) for crowd control inspiration and concepts
 - Three.js for 3D graphics
 - Socket.io for real-time communication
 - ngrok for HTTPS tunneling
