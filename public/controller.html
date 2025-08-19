@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snow Globe Controller</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: center;
+            color: white;
+            margin: 0;
+            padding: 20px 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+        
+        .container {
+            text-align: center;
+            padding: 1rem;
+            max-width: 400px;
+            width: 90%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .snow-globe {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(255,255,255,0.2), rgba(255,255,255,0.05));
+            border: 3px solid rgba(255,255,255,0.3);
+            margin: 2rem auto;
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        
+        .snowflake {
+            position: absolute;
+            color: white;
+            font-size: 12px;
+            animation: fall linear infinite;
+            pointer-events: none;
+        }
+        
+        @keyframes fall {
+            from {
+                transform: translateY(-20px) rotate(0deg);
+                opacity: 1;
+            }
+            to {
+                transform: translateY(220px) rotate(360deg);
+                opacity: 0;
+            }
+        }
+        
+        .title {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .instruction {
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+            opacity: 0.9;
+        }
+        
+        .connect-btn {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a52);
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            color: white;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+            margin-bottom: 2rem;
+        }
+        
+        .connect-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+        
+        .connect-btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status {
+            padding: 10px 20px;
+            border-radius: 25px;
+            background: rgba(255,255,255,0.1);
+            margin-bottom: 1rem;
+            backdrop-filter: blur(10px);
+        }
+        
+        .connected {
+            background: rgba(76, 175, 80, 0.3);
+        }
+        
+        .shake-instruction {
+            font-size: 1.3rem;
+            font-weight: bold;
+            animation: pulse 2s infinite;
+            margin-top: 1rem;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .motion-data {
+            background: rgba(0,0,0,0.2);
+            padding: 1rem;
+            border-radius: 10px;
+            margin-top: 1rem;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="title">❄️ Snow Globe</h1>
+        <p class="instruction">Enter the magical snow globe experience</p>
+        
+        <div class="snow-globe" id="snowGlobe">
+            <!-- Snowflakes will be added here -->
+        </div>
+        
+        <div class="status" id="status">
+            Ready to connect
+        </div>
+        
+        <button class="connect-btn" id="connectBtn" onclick="connectToGlobe()">
+            Connect to Snow Globe
+        </button>
+        
+        <div id="connectedUI" style="display: none; width: 100%; max-width: 400px;">
+            <p class="shake-instruction">🤳 Shake your phone to make it snow!</p>
+            <div class="motion-data" id="motionData">
+                Waiting for motion...
+            </div>
+            <div style="padding: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; font-size: 0.9rem; margin-top: 1rem;">
+                <div>Response Time: <span id="responseTime">-</span>ms</div>
+                <div>Last Confirmed: <span id="lastConfirmed">None</span></div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; width: 100%;">
+                <button class="connect-btn" id="pauseBtn" onclick="toggleShakeDetection()" style="background: linear-gradient(45deg, #FF9800, #F57C00); font-size: 0.9rem; padding: 10px 20px;">
+                    Pause Shake Detection
+                </button>
+                <button class="connect-btn" id="disconnectBtn" onclick="disconnectFromGlobe()" style="background: linear-gradient(45deg, #f44336, #d32f2f);">
+                    Disconnect
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        let socket = null;
+        let isConnected = false;
+        let snowflakeCount = 0;
+        let shakeSentTime = 0; // Track shake timing for response calculation
+        
+        // Global function for debugging - will be set in startMotionDetection
+        function toggleShakeDetection() {
+            console.log('toggleShakeDetection not yet initialized');
+        }
+        
+        // Snow globe animation
+        function createSnowflake() {
+            const snowGlobe = document.getElementById('snowGlobe');
+            const snowflake = document.createElement('div');
+            snowflake.className = 'snowflake';
+            snowflake.innerHTML = '❄';
+            
+            // Random position
+            snowflake.style.left = Math.random() * 180 + 'px';
+            snowflake.style.animationDuration = (Math.random() * 3 + 2) + 's';
+            snowflake.style.animationDelay = Math.random() * 2 + 's';
+            
+            snowGlobe.appendChild(snowflake);
+            
+            // Remove after animation
+            setTimeout(() => {
+                if (snowflake.parentNode) {
+                    snowflake.parentNode.removeChild(snowflake);
+                }
+            }, 5000);
+        }
+        
+        // Create initial snowflakes
+        function startSnowing(intensity = 1) {
+            const interval = Math.max(100, 500 / intensity);
+            for (let i = 0; i < intensity; i++) {
+                setTimeout(() => createSnowflake(), i * (interval / intensity));
+            }
+        }
+        
+        // Start gentle snow
+        setInterval(() => startSnowing(1), 500);
+        
+        function connectToGlobe() {
+            const btn = document.getElementById('connectBtn');
+            const status = document.getElementById('status');
+            
+            btn.disabled = true;
+            btn.textContent = 'Connecting...';
+            status.textContent = 'Connecting to snow globe...';
+            
+            // Dynamic server URL - automatically detects if using ngrok or local IP
+            let serverUrl;
+            
+            if (window.location.hostname.includes('ngrok') || window.location.protocol === 'https:') {
+                // Use current domain for ngrok or HTTPS
+                serverUrl = window.location.origin;
+                console.log('🔐 Using HTTPS/ngrok URL:', serverUrl);
+            } else if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                // Local development
+                serverUrl = window.location.origin;
+                console.log('🏠 Using localhost URL:', serverUrl);
+            } else {
+                // Local network IP (fallback)
+                serverUrl = 'http://80.80.80.30:3000';
+                console.log('🌐 Using local IP URL:', serverUrl);
+            }
+            
+            console.log('🔌 Attempting to connect to:', serverUrl);
+            socket = io(serverUrl);
+            
+            socket.on('connect', () => {
+                console.log('✅ Socket connected to server');
+                
+                // Register as controller
+                socket.emit('register', {
+                    type: 'controller',
+                    userAgent: navigator.userAgent
+                });
+                console.log('📱 Sent registration as controller');
+            });
+            
+            socket.on('connected', (data) => {
+                console.log('✅ Successfully registered as controller:', data);
+                isConnected = true;
+                btn.style.display = 'none';
+                status.textContent = `✅ Connected to Snow Globe (${data.totalUsers} users)`;
+                status.className = 'status connected';
+                document.getElementById('connectedUI').style.display = 'block';
+                
+                // Request device motion permission (iOS 13+ and some Android browsers)
+                console.log('🔐 Requesting motion permissions...');
+                
+                // Check if permission API is available
+                if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                    console.log('📱 iOS-style permission request available');
+                    DeviceMotionEvent.requestPermission().then(response => {
+                        console.log('📱 Motion permission response:', response);
+                        if (response === 'granted') {
+                            console.log('✅ Motion permission granted');
+                            startMotionDetection();
+                        } else {
+                            console.error('❌ Motion permission denied');
+                            showMotionPermissionError();
+                        }
+                    }).catch(error => {
+                        console.error('❌ Error requesting motion permission:', error);
+                        // Try without permission request
+                        startMotionDetection();
+                    });
+                } else if (navigator.permissions) {
+                    // Try modern permissions API (Android Chrome)
+                    console.log('🔐 Trying modern permissions API...');
+                    navigator.permissions.query({name: 'accelerometer'}).then(result => {
+                        console.log('📱 Accelerometer permission:', result.state);
+                        if (result.state === 'granted') {
+                            startMotionDetection();
+                        } else if (result.state === 'prompt') {
+                            // User needs to interact first
+                            showPermissionPrompt();
+                        } else {
+                            console.warn('⚠️ Accelerometer permission denied');
+                            startMotionDetection(); // Try anyway
+                        }
+                    }).catch(error => {
+                        console.log('📱 Permissions API not available, trying direct access');
+                        startMotionDetection();
+                    });
+                } else {
+                    console.log('📱 No permission API available, trying direct access');
+                    startMotionDetection();
+                }
+                
+                function showPermissionPrompt() {
+                    document.getElementById('motionData').innerHTML = `
+                        🔐 Motion permission needed!<br>
+                        <button onclick="requestMotionAccess()" style="
+                            background: #4CAF50; 
+                            color: white; 
+                            border: none; 
+                            padding: 10px 20px; 
+                            border-radius: 5px; 
+                            margin-top: 10px;
+                            cursor: pointer;
+                        ">Enable Motion Detection</button><br>
+                        <small>Click to allow motion sensors</small>
+                    `;
+                    
+                    window.requestMotionAccess = function() {
+                        console.log('🔐 User clicked motion access button');
+                        startMotionDetection();
+                    };
+                }
+                
+                function showMotionPermissionError() {
+                    document.getElementById('motionData').innerHTML = `
+                        ❌ Motion permission denied!<br><br>
+                        <strong>To fix this:</strong><br>
+                        1. Open browser settings<br>
+                        2. Find "Site settings" or "Permissions"<br>
+                        3. Allow "Motion sensors" for this site<br>
+                        4. Refresh the page<br><br>
+                        <button onclick="location.reload()" style="
+                            background: #FF9800; 
+                            color: white; 
+                            border: none; 
+                            padding: 10px 20px; 
+                            border-radius: 5px;
+                            cursor: pointer;
+                        ">Refresh Page</button>
+                    `;
+                }
+            });
+            
+            socket.on('shakeConfirmed', (data) => {
+                const responseTime = Date.now() - (data.clientSentTime || shakeSentTime);
+                console.log('✅ Shake confirmed by server:', data, `Response time: ${responseTime}ms`);
+                
+                // Update response time display
+                document.getElementById('responseTime').textContent = responseTime;
+                document.getElementById('lastConfirmed').textContent = new Date().toLocaleTimeString();
+                
+                // Enhanced visual feedback
+                const status = document.getElementById('status');
+                const originalText = status.textContent;
+                
+                status.textContent = `✨ Shake confirmed! Intensity: ${data.intensity} (${responseTime}ms)`;
+                status.style.color = '#4CAF50';
+                
+                // Background flash
+                document.body.style.background = `linear-gradient(135deg, #4CAF50 0%, #45a049 100%)`;
+                
+                // Reset after feedback
+                setTimeout(() => {
+                    status.textContent = originalText;
+                    status.style.color = '';
+                    document.body.style.background = `linear-gradient(135deg, #667eea 0%, #764ba2 100%)`;
+                }, 1000);
+            });
+            
+            socket.on('disconnect', () => {
+                console.log('❌ Disconnected from server');
+                isConnected = false;
+                status.textContent = 'Disconnected from snow globe';
+                status.className = 'status';
+                document.getElementById('connectedUI').style.display = 'none';
+                btn.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = 'Connect to Snow Globe';
+            });
+            
+            socket.on('connect_error', (error) => {
+                console.error('❌ Connection error:', error);
+                status.textContent = `Connection failed: ${error.message}`;
+                btn.disabled = false;
+                btn.textContent = 'Try Again';
+            });
+            
+            socket.on('error', (error) => {
+                console.error('❌ Socket error:', error);
+                status.textContent = 'Connection error. Please try again.';
+                btn.disabled = false;
+                btn.textContent = 'Try Again';
+            });
+            
+            // Add timeout for connection attempt
+            setTimeout(() => {
+                if (!isConnected) {
+                    console.error('❌ Connection timeout');
+                    status.textContent = 'Connection timeout. Check your network.';
+                    btn.disabled = false;
+                    btn.textContent = 'Try Again';
+                }
+            }, 10000); // 10 second timeout
+        }
+        
+        function startMotionDetection() {
+            let lastShake = 0;
+            let motionEventCount = 0;
+            let shakeEventCount = 0;
+            let shakeDetectionEnabled = true;
+            
+            console.log('🎯 Starting motion detection...');
+            
+            // Make this function accessible globally for debugging
+            window.toggleShakeDetection = function() {
+                shakeDetectionEnabled = !shakeDetectionEnabled;
+                const btn = document.getElementById('pauseBtn');
+                if (shakeDetectionEnabled) {
+                    btn.textContent = 'Pause Shake Detection';
+                    btn.style.background = 'linear-gradient(45deg, #FF9800, #F57C00)';
+                    console.log('🟢 Shake detection ENABLED');
+                } else {
+                    btn.textContent = 'Resume Shake Detection';
+                    btn.style.background = 'linear-gradient(45deg, #4CAF50, #45a049)';
+                    console.log('🔴 Shake detection PAUSED');
+                }
+            };
+            
+            // Add multiple event listeners for different Android browsers
+            const eventTypes = ['devicemotion', 'deviceorientation'];
+            let motionListenerAdded = false;
+            
+            // Try devicemotion first (preferred)
+            try {
+                window.addEventListener('devicemotion', handleMotion, { passive: false });
+                motionListenerAdded = true;
+                console.log('✅ Added devicemotion listener');
+            } catch (error) {
+                console.error('❌ Failed to add devicemotion listener:', error);
+            }
+            
+            // Fallback: try adding listener with user gesture
+            if (!motionListenerAdded) {
+                console.log('🔄 Adding motion listener on user interaction...');
+                document.addEventListener('click', function addMotionOnClick() {
+                    try {
+                        window.addEventListener('devicemotion', handleMotion, { passive: false });
+                        console.log('✅ Added devicemotion listener after user click');
+                        document.removeEventListener('click', addMotionOnClick);
+                    } catch (error) {
+                        console.error('❌ Still failed to add motion listener:', error);
+                    }
+                }, { once: true });
+                
+                document.getElementById('motionData').innerHTML = `
+                    🔐 Motion setup needed!<br>
+                    <button onclick="enableMotion()" style="
+                        background: #4CAF50; 
+                        color: white; 
+                        border: none; 
+                        padding: 15px 25px; 
+                        border-radius: 8px; 
+                        margin-top: 10px;
+                        cursor: pointer;
+                        font-size: 16px;
+                    ">Enable Motion Sensors</button><br>
+                    <small>Tap to activate shake detection</small>
+                `;
+                
+                window.enableMotion = function() {
+                    console.log('🔐 User enabling motion...');
+                    try {
+                        window.addEventListener('devicemotion', handleMotion, { passive: false });
+                        console.log('✅ Motion listener added');
+                        document.getElementById('motionData').innerHTML = `
+                            🎯 Motion detection starting...<br>
+                            Waiting for motion data...
+                        `;
+                    } catch (error) {
+                        console.error('❌ Failed to enable motion:', error);
+                        document.getElementById('motionData').innerHTML = `
+                            ❌ Motion not supported<br>
+                            Your browser/device may not support motion sensors
+                        `;
+                    }
+                };
+            }
+            
+            function handleMotion(event) {
+                motionEventCount++;
+                const acceleration = event.accelerationIncludingGravity;
+                
+                if (!acceleration) {
+                    if (motionEventCount === 1) {
+                        console.warn('⚠️ No acceleration data in first event');
+                    }
+                    return;
+                }
+                
+                const x = acceleration.x || 0;
+                const y = acceleration.y || 0;
+                const z = acceleration.z || 0;
+                
+                // Calculate total acceleration
+                const totalAcceleration = Math.sqrt(x*x + y*y + z*z);
+                
+                // REDUCED shake threshold for easier testing
+                const shakeThreshold = 12; // Even lower threshold
+                const minTimeBetweenShakes = 800; // Shorter cooldown
+                const now = Date.now();
+                
+                // Update motion data display (every 10 events to reduce spam)
+                if (motionEventCount % 10 === 0) {
+                    const status = shakeDetectionEnabled ? '🟢 ACTIVE' : '🔴 PAUSED';
+                    document.getElementById('motionData').innerHTML = `
+                        Detection: ${status}<br>
+                        X: ${x.toFixed(2)}<br>
+                        Y: ${y.toFixed(2)}<br>
+                        Z: ${z.toFixed(2)}<br>
+                        Total: ${totalAcceleration.toFixed(2)}<br>
+                        Threshold: ${shakeThreshold}<br>
+                        Shake Events: ${shakeEventCount}<br>
+                        Motion Events: ${motionEventCount}
+                    `;
+                }
+                
+                // Log high acceleration values for debugging
+                if (totalAcceleration > 10) {
+                    console.log(`📊 High motion: ${totalAcceleration.toFixed(2)} (threshold: ${shakeThreshold})`);
+                }
+                
+                // Only detect shakes if enabled
+                if (!shakeDetectionEnabled) return;
+                
+                // Detect significant shake
+                if (totalAcceleration > shakeThreshold && now - lastShake > minTimeBetweenShakes) {
+                    lastShake = now;
+                    shakeEventCount++;
+                    shakeSentTime = now;
+                    
+                    // Calculate intensity
+                    const rawIntensity = (totalAcceleration - shakeThreshold) / 6;
+                    const intensity = Math.min(Math.max(Math.floor(rawIntensity), 1), 10);
+                    
+                    console.log(`🔥 SHAKE DETECTED #${shakeEventCount}! Intensity: ${intensity}, Acceleration: ${totalAcceleration.toFixed(2)}`);
+                    
+                    // Trigger local snow effect
+                    startSnowing(intensity);
+                    
+                    // Send shake data to server
+                    if (socket && isConnected) {
+                        const shakeData = {
+                            intensity,
+                            acceleration: totalAcceleration,
+                            x, y, z,
+                            timestamp: now,
+                            shakeNumber: shakeEventCount,
+                            clientSentTime: now
+                        };
+                        
+                        socket.emit('shake', shakeData);
+                        console.log(`📡 Sent shake #${shakeEventCount} to server:`, shakeData);
+                    } else {
+                        console.error('❌ Cannot send shake - not connected!', { socket: !!socket, isConnected });
+                    }
+                    
+                    // Visual feedback for successful shake
+                    document.body.style.background = `linear-gradient(135deg, #4CAF50 0%, #45a049 100%)`;
+                    setTimeout(() => {
+                        document.body.style.background = `linear-gradient(135deg, #667eea 0%, #764ba2 100%)`;
+                    }, 500);
+                    
+                    // Show cooldown period
+                    document.getElementById('motionData').innerHTML = `
+                        🔥 SHAKE DETECTED! #${shakeEventCount}<br>
+                        Intensity: ${intensity}<br>
+                        Acceleration: ${totalAcceleration.toFixed(2)}<br>
+                        Sent to server: ${socket && isConnected ? '✅' : '❌'}<br>
+                        Cooldown: 0.8 seconds...
+                    `;
+                    
+                    // Vibrate if available
+                    if (navigator.vibrate) {
+                        navigator.vibrate(100);
+                    }
+                }
+            }
+            
+            // Test if device motion is working
+            setTimeout(() => {
+                if (motionEventCount === 0) {
+                    console.error('❌ No motion events detected after 3 seconds!');
+                    document.getElementById('motionData').innerHTML = `
+                        ❌ No motion detected!<br>
+                        <strong>Troubleshooting:</strong><br>
+                        1. Make sure you're on HTTPS or localhost<br>
+                        2. Check browser motion permissions<br>
+                        3. Try a different browser (Chrome recommended)<br>
+                        4. Ensure motion sensors aren't disabled<br><br>
+                        <button onclick="location.reload()" style="
+                            background: #FF9800; 
+                            color: white; 
+                            border: none; 
+                            padding: 10px 20px; 
+                            border-radius: 5px;
+                            cursor: pointer;
+                        ">Retry</button>
+                    `;
+                } else {
+                    console.log(`✅ Motion detection working: ${motionEventCount} events in 3 seconds`);
+                    document.getElementById('motionData').innerHTML = `
+                        ✅ Motion detection active!<br>
+                        Shake your phone to create snow.<br>
+                        <small>Threshold: ${12}+ acceleration units</small><br>
+                        <small>Cooldown: 0.8 seconds between shakes</small>
+                    `;
+                }
+            }, 3000);
+        }
+        
+        function disconnectFromGlobe() {
+            if (socket && isConnected) {
+                socket.disconnect();
+            }
+            
+            // Reset UI immediately
+            isConnected = false;
+            document.getElementById('status').textContent = 'Disconnected';
+            document.getElementById('status').className = 'status';
+            document.getElementById('connectedUI').style.display = 'none';
+            document.getElementById('connectBtn').style.display = 'block';
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('connectBtn').textContent = 'Connect to Snow Globe';
+            
+            console.log('Manually disconnected from snow globe');
+        }
+        
+        // Simulate connection to WebSocket server
+        // This is handled in connectToGlobe() function above
+    </script>
+</body>
+</html>

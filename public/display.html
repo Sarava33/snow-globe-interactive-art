@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snow Globe Display</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            z-index: 100;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        #qr-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+            z-index: 200;
+            background: rgba(0,0,0,0.8);
+            padding: 30px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+        
+        #qr-code {
+            width: 200px;
+            height: 200px;
+            background: white;
+            margin: 20px auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px;
+            font-size: 12px;
+            text-align: center;
+            color: #333;
+        }
+        
+        .instruction {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        
+        .url {
+            font-size: 14px;
+            color: #4CAF50;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    
+    <div id="info">
+        <div>Connected Users: <span id="userCount">0</span></div>
+        <div>Active Shakes: <span id="shakeCount">0</span></div>
+        <div>Snow Intensity: <span id="intensity">1</span></div>
+        <div>Last Shake: <span id="lastShake">None</span></div>
+        <div>Total Shakes: <span id="totalShakes">0</span></div>
+        <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">
+            Reset Time: <span id="resetTime">3</span>s | 
+            <span id="countdown" style="color: #FF9800;"></span>
+        </div>
+    </div>
+    
+    <div id="qr-overlay">
+        <div class="instruction">📱 Scan QR Code or Visit URL</div>
+        <div id="qr-code">
+            QR CODE HERE<br>
+            (In production, generate<br>
+            QR code for controller URL)
+        </div>
+        <div class="url" id="controllerUrl">Visit: [loading...]</div>
+        <div style="margin-top: 15px; font-size: 14px; opacity: 0.8;">
+            No app download required!
+        </div>
+        <div style="margin-top: 10px; font-size: 12px; opacity: 0.6;">
+            Admin: +/- keys adjust reset time
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        // Global variables - RESET TO ZERO
+        let scene, camera, renderer, globe, snowParticles = [];
+        let shakeQueue = [];
+        let connectedUsers = 0;  // MUST stay 0 until real controller connects
+        let currentIntensity = 1;
+        let socket = null;
+        let activeShakes = 0;    // MUST stay 0 until real shake received
+        let totalShakes = 0;     // MUST stay 0 until real shake received
+        let shakeResetTimer = null;
+        let countdownTimer = null;
+        let resetTimeSeconds = 3;
+        
+        console.log('🎬 STARTING CLEAN - ALL COUNTERS SHOULD BE ZERO');
+        console.log('📊 Initial values - Users:', connectedUsers, 'Active:', activeShakes, 'Total:', totalShakes);
+        
+        // Helper function to safely update DOM elements
+        function updateElement(id, text) {
+            const element = document.getElementById(id);
+            if (element) {
+                console.log(`🔄 Updating ${id} to:`, text);
+                element.textContent = text;
+            } else {
+                console.warn(`⚠️ Element '${id}' not found`);
+            }
+        }
+        
+        // Initialize Three.js snow globe
+        function init() {
+            console.log('🎬 Initializing snow globe display...');
+            
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x001122);
+            
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 0, 5);
+            
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('container').appendChild(renderer.domElement);
+            
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 5, 5);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+            
+            // Create snow globe
+            createSnowGlobe();
+            
+            // Create initial snow
+            createSnowSystem();
+            
+            // Initialize WebSocket connection
+            initializeWebSocket();
+            
+            // Start animation
+            animate();
+            
+            console.log('✅ Snow globe initialization complete');
+        }
+        
+        function createSnowGlobe() {
+            // Globe base
+            const baseGeometry = new THREE.CylinderGeometry(2, 2.2, 0.5, 32);
+            const baseMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.position.y = -2;
+            scene.add(base);
+            
+            // Globe sphere (transparent)
+            const globeGeometry = new THREE.SphereGeometry(2, 32, 32);
+            const globeMaterial = new THREE.MeshPhongMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.1,
+                shininess: 100
+            });
+            globe = new THREE.Mesh(globeGeometry, globeMaterial);
+            globe.position.y = -0.5;
+            scene.add(globe);
+            
+            // Inner scene - Christmas tree
+            const treeGeometry = new THREE.ConeGeometry(0.5, 1.5, 8);
+            const treeMaterial = new THREE.MeshLambertMaterial({ color: 0x0F5132 });
+            const tree = new THREE.Mesh(treeGeometry, treeMaterial);
+            tree.position.set(0, -1.2, 0);
+            scene.add(tree);
+            
+            // Tree trunk
+            const trunkGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.3, 8);
+            const trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.set(0, -2, 0);
+            scene.add(trunk);
+            
+            // Ground inside globe
+            const groundGeometry = new THREE.CircleGeometry(1.8, 32);
+            const groundMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -2;
+            scene.add(ground);
+        }
+        
+        function createSnowSystem() {
+            // Remove old snow particles
+            snowParticles.forEach(particle => scene.remove(particle));
+            snowParticles = [];
+            
+            // Create new snow particles
+            const snowCount = 500;
+            const snowGeometry = new THREE.SphereGeometry(0.02, 6, 6);
+            const snowMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            
+            for (let i = 0; i < snowCount; i++) {
+                const snowflake = new THREE.Mesh(snowGeometry, snowMaterial);
+                
+                // Random position within globe
+                const radius = Math.random() * 1.8;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.random() * Math.PI;
+                
+                snowflake.position.x = radius * Math.sin(phi) * Math.cos(theta);
+                snowflake.position.y = radius * Math.cos(phi) + Math.random() * 2 - 1;
+                snowflake.position.z = radius * Math.sin(phi) * Math.sin(theta);
+                
+                // Add random velocity
+                snowflake.userData = {
+                    velocityY: -0.005 - Math.random() * 0.01,
+                    velocityX: (Math.random() - 0.5) * 0.002,
+                    velocityZ: (Math.random() - 0.5) * 0.002,
+                    baseVelocity: -0.005 - Math.random() * 0.01
+                };
+                
+                scene.add(snowflake);
+                snowParticles.push(snowflake);
+            }
+        }
+        
+        function updateSnow() {
+            snowParticles.forEach(particle => {
+                // Update position
+                particle.position.y += particle.userData.velocityY;
+                particle.position.x += particle.userData.velocityX;
+                particle.position.z += particle.userData.velocityZ;
+                
+                // Reset if fallen below globe
+                if (particle.position.y < -2.5) {
+                    particle.position.y = 1.5;
+                    particle.position.x = (Math.random() - 0.5) * 3;
+                    particle.position.z = (Math.random() - 0.5) * 3;
+                }
+                
+                // Keep within globe bounds
+                const distance = Math.sqrt(
+                    particle.position.x ** 2 + 
+                    particle.position.z ** 2
+                );
+                if (distance > 1.8) {
+                    particle.position.x *= 0.9;
+                    particle.position.z *= 0.9;
+                }
+            });
+            
+            // Process ONLY real shake queue from WebSocket
+            if (shakeQueue.length > 0) {
+                const shake = shakeQueue.shift();
+                applyShakeEffect(shake.intensity);
+            }
+        }
+        
+        function applyShakeEffect(intensity) {
+            currentIntensity = intensity;
+            updateElement('intensity', intensity);
+            
+            // Increase snow speed and add turbulence
+            snowParticles.forEach(particle => {
+                particle.userData.velocityY = particle.userData.baseVelocity * (1 + intensity * 0.5);
+                particle.userData.velocityX += (Math.random() - 0.5) * 0.01 * intensity;
+                particle.userData.velocityZ += (Math.random() - 0.5) * 0.01 * intensity;
+            });
+            
+            // Shake the globe slightly
+            globe.rotation.x = (Math.random() - 0.5) * 0.1 * intensity;
+            globe.rotation.z = (Math.random() - 0.5) * 0.1 * intensity;
+            
+            // Reset globe rotation after a moment
+            setTimeout(() => {
+                globe.rotation.x = 0;
+                globe.rotation.z = 0;
+            }, 500);
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Update snow - ONLY process real shake queue
+            updateSnow();
+            
+            // Slowly rotate the globe
+            globe.rotation.y += 0.005;
+            
+            // Render
+            renderer.render(scene, camera);
+        }
+        
+        // WebSocket connection
+        function initializeWebSocket() {
+            console.log('🔌 Initializing WebSocket connection...');
+            
+            // Dynamic server URL - automatically detects if using ngrok or local IP
+            let serverUrl;
+            
+            if (window.location.hostname.includes('ngrok') || window.location.protocol === 'https:') {
+                // Use current domain for ngrok or HTTPS
+                serverUrl = window.location.origin;
+                console.log('🔐 Using HTTPS/ngrok URL:', serverUrl);
+            } else if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                // Local development
+                serverUrl = window.location.origin;
+                console.log('🏠 Using localhost URL:', serverUrl);
+            } else {
+                // Local network IP (fallback)
+                serverUrl = 'http://80.80.80.30:3000';
+                console.log('🌐 Using local IP URL:', serverUrl);
+            }
+            
+            console.log('🔌 Display attempting to connect to:', serverUrl);
+            socket = io(serverUrl);
+            
+            socket.on('connect', () => {
+                console.log('✅ Display connected to server');
+                
+                // Register as display
+                socket.emit('register', {
+                    type: 'display'
+                });
+                console.log('🖥️ Sent registration as display');
+            });
+            
+            socket.on('shake', (data) => {
+                console.log('🔥 REAL SHAKE RECEIVED from phone:', data);
+                
+                // ONLY increment on real shake events
+                shakeQueue.push(data);
+                activeShakes++;
+                totalShakes++;
+                
+                console.log('📊 Shake counters - Active:', activeShakes, 'Total:', totalShakes);
+                
+                // Update UI
+                updateElement('shakeCount', activeShakes);
+                updateElement('totalShakes', totalShakes);
+                
+                const lastShakeTime = new Date(data.timestamp).toLocaleTimeString();
+                updateElement('lastShake', `${lastShakeTime} (I:${data.intensity})`);
+                
+                // Start countdown to reset active shakes
+                if (shakeResetTimer) clearTimeout(shakeResetTimer);
+                if (countdownTimer) clearInterval(countdownTimer);
+                
+                let timeLeft = resetTimeSeconds;
+                const updateCountdown = () => {
+                    if (timeLeft > 0) {
+                        updateElement('countdown', `Reset in ${timeLeft}s`);
+                        timeLeft--;
+                    } else {
+                        activeShakes = 0;
+                        updateElement('shakeCount', activeShakes);
+                        updateElement('countdown', '');
+                        console.log('🔄 Active shake counter reset to 0');
+                        clearInterval(countdownTimer);
+                    }
+                };
+                
+                updateCountdown();
+                countdownTimer = setInterval(updateCountdown, 1000);
+            });
+            
+            socket.on('userConnected', (data) => {
+                console.log('👤 User connected event:', data);
+                connectedUsers = data.totalUsers;
+                updateElement('userCount', connectedUsers);
+                
+                if (connectedUsers === 1) {
+                    const qrOverlay = document.getElementById('qr-overlay');
+                    if (qrOverlay) qrOverlay.style.display = 'none';
+                }
+            });
+            
+            socket.on('userDisconnected', (data) => {
+                console.log('👤 User disconnected event:', data);
+                connectedUsers = data.totalUsers;
+                updateElement('userCount', connectedUsers);
+                
+                if (connectedUsers === 0) {
+                    const qrOverlay = document.getElementById('qr-overlay');
+                    if (qrOverlay) qrOverlay.style.display = 'block';
+                }
+            });
+            
+            socket.on('userCount', (data) => {
+                console.log('📊 User count update received:', data);
+                connectedUsers = data.count;
+                updateElement('userCount', connectedUsers);
+                
+                const qrOverlay = document.getElementById('qr-overlay');
+                if (qrOverlay) {
+                    if (connectedUsers > 0) {
+                        qrOverlay.style.display = 'none';
+                    } else {
+                        qrOverlay.style.display = 'block';
+                    }
+                }
+            });
+            
+            socket.on('stats', (data) => {
+                console.log('Server stats:', data);
+            });
+        }
+        
+        // Admin controls only
+        document.addEventListener('keydown', (event) => {
+            if (event.key === '+' || event.key === '=') {
+                resetTimeSeconds = Math.min(resetTimeSeconds + 1, 10);
+                updateElement('resetTime', resetTimeSeconds);
+            } else if (event.key === '-') {
+                resetTimeSeconds = Math.max(resetTimeSeconds - 1, 1);
+                updateElement('resetTime', resetTimeSeconds);
+            }
+        });
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Initialize when DOM is ready
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🎬 DOM loaded, starting clean initialization...');
+            
+            // Update QR overlay with correct controller URL
+            const controllerUrl = window.location.origin + '/controller.html';
+            const urlElement = document.getElementById('controllerUrl');
+            if (urlElement) {
+                urlElement.textContent = `Visit: ${controllerUrl}`;
+                console.log('📱 Controller URL set to:', controllerUrl);
+            }
+            
+            init();
+        });
+        
+        if (document.readyState !== 'loading') {
+            console.log('🎬 DOM already loaded, starting clean initialization...');
+            
+            // Update QR overlay with correct controller URL
+            const controllerUrl = window.location.origin + '/controller.html';
+            const urlElement = document.getElementById('controllerUrl');
+            if (urlElement) {
+                urlElement.textContent = `Visit: ${controllerUrl}`;
+                console.log('📱 Controller URL set to:', controllerUrl);
+            }
+            
+            init();
+        }
+    </script>
+</body>
+</html>
